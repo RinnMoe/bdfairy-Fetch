@@ -1,6 +1,6 @@
-# electricity
+# bdfairy-Fetch
 
-北电智慧水电（[bd.bdfairy.cn](http://bd.bdfairy.cn)）**多校电表查询** Python 库 + CLI。
+电精灵服务号（[bd.bdfairy.cn](http://bd.bdfairy.cn)）**多校电表查询** Python 库 + CLI。
 
 - **55 所**探测为 `full`（表号 + 余额）；另有 **meter_bill / cascade_ok** 等有限支持校区（见下文）
 - **无需微信登录 / OAuth**（匿名 `connect.sid` 即可）
