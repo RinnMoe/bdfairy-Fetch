@@ -19,8 +19,14 @@ from electricity import (
     describe_id,
     get_school,
     group_areas,
+    list_buildings,
+    list_floors,
+    list_rooms,
     load_profile,
+    load_tree,
+    resolve_room,
     split_id,
+    tree_meta,
 )
 from electricity.cli import build_parser
 from electricity.room import extract_meters
@@ -120,6 +126,44 @@ class IdRuleTests(unittest.TestCase):
             self.assertIn(part, text)
 
 
+class TreeSnapshotTests(unittest.TestCase):
+    def test_snapshot_available(self) -> None:
+        meta = tree_meta()
+        self.assertTrue(meta["available"])
+        self.assertIsNotNone(meta["updated_at"])
+        self.assertEqual(meta["counts"]["buildings"], 88)
+        self.assertGreater(meta["counts"]["floors"], 0)
+        self.assertGreater(meta["counts"]["rooms"], 0)
+
+    def test_buildings_from_snapshot(self) -> None:
+        rows = list_buildings()
+        self.assertEqual(len(rows), 88)
+        self.assertEqual(len(list_buildings(group="004")), 5)
+        b = next(
+            x for x in rows if x["group"] == "003" and x["name"] == "1号公寓"
+        )
+        self.assertEqual(b["floor_count"], 4)
+        self.assertEqual(b["room_count"], 144)
+
+    def test_floors_and_rooms_from_snapshot(self) -> None:
+        f = list_floors("1号公寓", group="003")
+        self.assertEqual(
+            [x["name"] for x in f["floors"]],
+            ["1楼", "2楼", "3楼", "4楼"],
+        )
+        r = list_rooms("1号公寓", "1楼", group="003")
+        self.assertEqual(len(r["rooms"]), 36)
+        self.assertEqual(r["rooms"][0]["name"], "充值前请确认房间")
+
+    def test_resolve_room_from_snapshot(self) -> None:
+        path = resolve_room("1号公寓", "1楼", "101", group="003")
+        self.assertIn("101", path["room"]["name"])
+        self.assertTrue(
+            path["room"]["id"].startswith("001000003000001000001")
+        )
+        self.assertEqual(load_tree()["counts"]["buildings"], 88)
+
+
 class MeterExtractTests(unittest.TestCase):
     def test_vue_json_parse_payload(self) -> None:
         # 长安大学 /selectmeter 页面的真实数据形态
@@ -166,6 +210,11 @@ class CliParserTests(unittest.TestCase):
         self.assertEqual(args.building, "1号公寓")
         self.assertTrue(args.json)
 
+    def test_buildings_refresh(self) -> None:
+        args = build_parser().parse_args(["buildings", "--refresh"])
+        self.assertEqual(args.command, "buildings")
+        self.assertTrue(args.refresh)
+
     def test_meter(self) -> None:
         args = build_parser().parse_args(["meter", "--meter", "123456789012"])
         self.assertEqual(args.command, "meter")
@@ -185,6 +234,8 @@ class PublicApiTests(unittest.TestCase):
             "list_buildings",
             "list_floors",
             "list_rooms",
+            "load_tree",
+            "resolve_room",
             "get_school",
             "split_id",
         ):
