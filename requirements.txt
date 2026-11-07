@@ -1,2 +1,2 @@
-# 表号 / 房间直查 CLI 仅需 requests（无需微信 OAuth）
+# 长安大学电表查询仅需 requests（无需微信 OAuth）
 requests>=2.28.0

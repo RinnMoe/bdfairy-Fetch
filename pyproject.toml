@@ -1,16 +1,16 @@
 [project]
 name = "electricity"
 version = "1.0.0"
-description = "北电智慧水电（bd.bdfairy.cn）多校电表查询：表号/房间直查余额与账单，免微信 OAuth"
+description = "长安大学（bd.bdfairy.cn areaId=65）电表查询：楼栋/房间/表号/余额/账单/明细，免微信 OAuth"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "electricity contributors" }]
 keywords = [
   "bdfairy",
+  "changan",
   "electricity",
   "meter",
-  "campus",
   "dormitory",
   "cli",
 ]
@@ -36,8 +36,9 @@ dependencies = [
 bdfetch = "electricity.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/example/electricity"
-Documentation = "https://github.com/example/electricity#readme"
+Homepage = "https://github.com/RinnMoe/bdfairy-Fetch"
+Documentation = "https://github.com/RinnMoe/bdfairy-Fetch#readme"
+Upstream = "https://github.com/guiguisocute/bdfairy-Fetch"
 
 [build-system]
 requires = ["hatchling>=1.25"]
@@ -49,7 +50,9 @@ packages = ["src/electricity"]
 [tool.hatch.build.targets.sdist]
 include = [
   "/src",
+  "/tests",
   "/README.md",
+  "/VERIFY.md",
   "/LICENSE",
   "/pyproject.toml",
   "/requirements.txt",
