@@ -71,6 +71,7 @@
     "placeholder_room": "部分楼栋 1 楼首个房间为「充值前请确认房间」，序号最大（如 036），无表号"
   },
   "notes": [
+    "楼栋/楼层/房间结构保存在 data/changan_tree.json 静态快照；默认命令不访问 /getB，只有 bdfetch buildings --refresh 才刷新。",
     "根节点 bID=001000 返回 116 条楼栋，去重后 88 个唯一 BuildingID；按 group 查询会去重。",
     "绑房后 selectarea 返回 band=1，此时 /getB 返回 500；需 POST /phonejcbd 解绑后重试。",
     "非微信 UA 的 GET /?id=65 会 302 到微信 OAuth；API 链路使用 MicroMessenger UA。",

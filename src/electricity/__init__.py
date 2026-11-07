@@ -1,6 +1,7 @@
 """长安大学（bd.bdfairy.cn areaId=65）电表查询公开 API。
 
-只依赖 ``requests``；楼栋/楼层/房间、表号、余额、账单、日明细均走免微信 OAuth 链路。
+楼栋/楼层/房间来自本地静态快照（:mod:`electricity.tree`）；
+表号、余额、账单、明细为动态查询（:mod:`electricity.room` / :mod:`electricity.meter`）。
 
 典型用法::
 
@@ -35,12 +36,15 @@ from .changan import (
 )
 from .client import DEFAULT_BASE
 from .meter import pretty_print_meter, query_meter
-from .room import (
+from .room import query_room, scan_floor
+from .tree import (
     list_buildings,
     list_floors,
     list_rooms,
-    query_room,
-    scan_floor,
+    load_tree,
+    refresh_tree,
+    resolve_room,
+    tree_meta,
 )
 
 __version__ = "1.0.0"
@@ -63,4 +67,8 @@ __all__ = [
     "list_buildings",
     "list_floors",
     "list_rooms",
+    "load_tree",
+    "refresh_tree",
+    "resolve_room",
+    "tree_meta",
 ]

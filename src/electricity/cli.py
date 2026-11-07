@@ -2,12 +2,14 @@
 """
 长安大学（bd.bdfairy.cn areaId=65）电表查询 CLI。
 
-覆盖：楼栋/楼层/房间级联、房间→表号、表号余额/月账单/日明细。
-无需微信 OAuth。
+楼栋/楼层/房间来自本地静态快照（默认不访问 /getB）；
+表号、余额、账单、明细为动态查询。
+只有 `bdfetch buildings --refresh` 才会重新抓取静态树。
 
 示例：
   bdfetch info
   bdfetch buildings
+  bdfetch buildings --refresh
   bdfetch floors --building 1号公寓 --group 003
   bdfetch rooms --building 1号公寓 --group 003 --floor 1楼
   bdfetch room --building 1号公寓 --group 003 --floor 1楼 --room <房间> --json
@@ -24,26 +26,21 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
-from electricity.changan import (
-    AREA_ID,
-    AREA_NAME,
-    CAMPUS_ROOT,
-    get_school,
-    load_profile,
-)
+from electricity.changan import AREA_ID, AREA_NAME, get_school, load_profile
 from electricity.client import DEFAULT_BASE
 from electricity.meter import pretty_print_meter, query_meter
 from electricity.room import (
-    detect_campus_root,
-    list_floors,
-    list_rooms,
     load_export_state,
-    match_building,
-    match_floor,
-    new_login_session,
     query_room,
     save_export,
     scan_floor,
+)
+from electricity.tree import (
+    list_buildings,
+    list_floors,
+    list_rooms,
+    refresh_tree,
+    tree_meta,
 )
 from electricity.util import save_result
 
@@ -75,8 +72,10 @@ def cmd_info(args: argparse.Namespace) -> int:
         "groups": profile.get("groups"),
         "id_rule": profile.get("id_rule"),
         "notes": profile.get("notes"),
+        "tree": tree_meta(),
         "apis": {
             "buildings": "bdfetch buildings",
+            "buildings_refresh": "bdfetch buildings --refresh",
             "floors": "bdfetch floors --building <楼栋> [--group 003]",
             "rooms": "bdfetch rooms --building <楼栋> --floor <楼层> [--group 003]",
             "room_to_meter": (
@@ -95,53 +94,51 @@ def cmd_info(args: argparse.Namespace) -> int:
 
 
 def cmd_buildings(args: argparse.Namespace) -> int:
-    try:
-        s = new_login_session(base=args.base, timeout=args.timeout)
-        root, buildings = detect_campus_root(
-            s, preferred=args.campus_id, base=args.base, timeout=args.timeout
+    if args.refresh:
+        try:
+            tree = refresh_tree(
+                base=args.base,
+                timeout=args.timeout,
+                progress=lambda msg: print(msg, file=sys.stderr, flush=True),
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"刷新失败: {exc}", file=sys.stderr)
+            return 2
+        print(
+            f"静态树已更新: {tree_meta().get('path')} counts={tree.get('counts')}",
+            file=sys.stderr,
         )
-    except Exception as exc:  # noqa: BLE001
+
+    try:
+        rows = list_buildings()
+    except FileNotFoundError as exc:
         print(f"查询失败: {exc}", file=sys.stderr)
         return 2
-    if not buildings:
-        print("未获取到楼栋列表（级联失败）", file=sys.stderr)
-        return 2
+
     payload = {
         "area_id": AREA_ID,
         "area_name": AREA_NAME,
-        "campus_root": root,
-        "count": len(buildings),
-        "buildings": buildings,
+        "tree": tree_meta(),
+        "count": len(rows),
+        "buildings": rows,
     }
     _json_out(payload, args.out)
     return 0
 
 
-def _load_cascade(args: argparse.Namespace) -> tuple[Any, str, dict, list[dict]]:
-    s = new_login_session(base=args.base, timeout=args.timeout)
-    root, buildings = detect_campus_root(
-        s, preferred=args.campus_id, base=args.base, timeout=args.timeout
-    )
-    if not root or not buildings:
-        raise RuntimeError("无法探测 campus_root / 楼栋列表为空")
-    b = match_building(buildings, args.building, args.group)
-    floors = list_floors(s, b["id"], base=args.base, timeout=args.timeout)
-    return s, root, b, floors
-
-
 def cmd_floors(args: argparse.Namespace) -> int:
     try:
-        _s, root, b, floors = _load_cascade(args)
-    except Exception as exc:  # noqa: BLE001
+        result = list_floors(args.building, group=args.group)
+    except (FileNotFoundError, ValueError) as exc:
         print(f"查询失败: {exc}", file=sys.stderr)
         return 2
     payload = {
         "area_id": AREA_ID,
         "area_name": AREA_NAME,
-        "campus_root": root,
-        "building": b,
-        "count": len(floors),
-        "floors": floors,
+        "tree_updated_at": tree_meta().get("updated_at"),
+        "building": result["building"],
+        "count": len(result["floors"]),
+        "floors": result["floors"],
     }
     _json_out(payload, args.out)
     return 0
@@ -149,20 +146,18 @@ def cmd_floors(args: argparse.Namespace) -> int:
 
 def cmd_rooms(args: argparse.Namespace) -> int:
     try:
-        s, root, b, floors = _load_cascade(args)
-        f = match_floor(floors, args.floor)
-        rooms = list_rooms(s, f["id"], base=args.base, timeout=args.timeout)
-    except Exception as exc:  # noqa: BLE001
+        result = list_rooms(args.building, args.floor, group=args.group)
+    except (FileNotFoundError, ValueError) as exc:
         print(f"查询失败: {exc}", file=sys.stderr)
         return 2
     payload = {
         "area_id": AREA_ID,
         "area_name": AREA_NAME,
-        "campus_root": root,
-        "building": b,
-        "floor": f,
-        "count": len(rooms),
-        "rooms": rooms,
+        "tree_updated_at": tree_meta().get("updated_at"),
+        "building": result["building"],
+        "floor": result["floor"],
+        "count": len(result["rooms"]),
+        "rooms": result["rooms"],
     }
     _json_out(payload, args.out)
     return 0
@@ -198,7 +193,6 @@ def cmd_room(args: argparse.Namespace) -> int:
                 floor=args.floor,
                 group=args.group,
                 campus=args.campus,
-                campus_id=args.campus_id or CAMPUS_ROOT,
                 base=args.base,
                 timeout=args.timeout,
                 limit=args.limit,
@@ -238,7 +232,6 @@ def cmd_room(args: argparse.Namespace) -> int:
             room=args.room,
             group=args.group,
             campus=args.campus,
-            campus_id=args.campus_id or CAMPUS_ROOT,
             base=args.base,
             timeout=args.timeout,
         )
@@ -378,6 +371,7 @@ def build_parser() -> argparse.ArgumentParser:
 常用示例:
   bdfetch info
   bdfetch buildings
+  bdfetch buildings --refresh          # 仅结构变更时重新抓取静态树
   bdfetch floors --building 1号公寓 --group 003
   bdfetch rooms  --building 1号公寓 --group 003 --floor 1楼
   bdfetch room   --building 1号公寓 --group 003 --floor 1楼 --room <房间> --json
@@ -396,41 +390,38 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("info", help="长安大学能力、分组与代号规则")
+    p = sub.add_parser("info", help="长安大学能力、分组、代号规则与静态树状态")
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_info)
 
-    p = sub.add_parser("buildings", help="列出楼栋（按 BuildingID 去重）")
+    p = sub.add_parser("buildings", help="列出楼栋（读本地静态快照）")
     p.add_argument(
-        "--campus-id",
-        default=None,
-        help=f"覆盖 campus_root（默认 {CAMPUS_ROOT}）",
+        "--refresh",
+        action="store_true",
+        help="显式重新抓取 /getB 全树并覆盖静态快照（耗时较长）",
     )
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_buildings)
 
-    p = sub.add_parser("floors", help="列出某楼栋的楼层")
+    p = sub.add_parser("floors", help="列出某楼栋的楼层（读静态快照）")
     p.add_argument("--building", required=True, help="楼栋名或 15 位 ID")
     _add_group_arg(p)
-    p.add_argument("--campus-id", default=None)
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_floors)
 
-    p = sub.add_parser("rooms", help="列出某层的房间")
+    p = sub.add_parser("rooms", help="列出某层的房间（读静态快照）")
     p.add_argument("--building", required=True)
     p.add_argument("--floor", required=True)
     _add_group_arg(p)
-    p.add_argument("--campus-id", default=None)
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_rooms)
 
-    p = sub.add_parser("room", help="房间 → 表号（可再查余额）")
+    p = sub.add_parser("room", help="房间 → 表号（静态树解析 + 动态绑房）")
     p.add_argument("--building", default=None)
     p.add_argument("--floor", default=None)
     p.add_argument("--room", default=None)
     _add_group_arg(p)
     p.add_argument("--campus", default=None, help="buildingInfo 前缀（默认 长安大学）")
-    p.add_argument("--campus-id", default=None)
     p.add_argument("--scan-floor", action="store_true", help="扫整层房间→表号")
     p.add_argument("--resume", action="store_true")
     p.add_argument("--limit", type=int, default=0)
@@ -439,7 +430,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_room)
 
-    p = sub.add_parser("meter", help="表号 → 余额/月账单/日明细")
+    p = sub.add_parser("meter", help="表号 → 余额/月账单/日明细（动态）")
     p.add_argument("--meter", "-m", required=True, help="电表表号 comAddress")
     p.add_argument("--month", default=None, help="账单/明细月份 YYYY-MM")
     p.add_argument("--detail", action="store_true", help="额外拉日用电明细")
@@ -450,7 +441,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-dump", action="store_true")
     p.set_defaults(func=cmd_meter)
 
-    p = sub.add_parser("monitor", help="短时轮询余额")
+    p = sub.add_parser("monitor", help="短时轮询余额（动态）")
     p.add_argument("--meter", "-m", required=True)
     p.add_argument("--minutes", type=float, default=15)
     p.add_argument("--interval", type=float, default=30, help="秒")
