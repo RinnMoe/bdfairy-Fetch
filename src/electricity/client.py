@@ -1,10 +1,12 @@
-"""站点常量与请求 UA。
+"""长安大学站点常量与请求 UA。
 
 站点入口在微信 H5 里跑，因此请求需要带 MicroMessenger UA；
 这与「微信 OAuth 登录」无关，只是服务端的浏览器识别。
 """
 
 from __future__ import annotations
+
+from .changan import AREA_ID, AREA_NAME, CAMPUS_ROOT
 
 # 微信 Android 内置浏览器典型 UA（含 MicroMessenger）
 WECHAT_UA = (
@@ -16,5 +18,8 @@ WECHAT_UA = (
 )
 
 DEFAULT_BASE = "http://bd.bdfairy.cn"
-DEFAULT_AREA_ID = "83"
-DEFAULT_AREA_NAME = "江西师范大学"
+
+# 长安大学固定校区参数（保留别名，方便旧代码迁移）
+DEFAULT_AREA_ID = AREA_ID
+DEFAULT_AREA_NAME = AREA_NAME
+DEFAULT_CAMPUS_ROOT = CAMPUS_ROOT

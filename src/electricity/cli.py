@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """
-北电智慧水电（bd.bdfairy.cn）统一 CLI。
+长安大学（bd.bdfairy.cn areaId=65）电表查询 CLI。
 
-覆盖探测确认的 55 所 full 学校：表号直查余额/账单/日明细、房间级联查表号。
+覆盖：楼栋/楼层/房间级联、房间→表号、表号余额/月账单/日明细。
 无需微信 OAuth。
 
 示例：
-  bdfetch schools
-  bdfetch schools --query 师范
-  bdfetch meter --school 83 --meter 190610004855
-  bdfetch meter --school 80 --meter 220311002165 --detail
-  bdfetch room --school 83 --building 2栋 --floor 3楼 --room S305
-  bdfetch buildings --school 83
-  bdfetch monitor --school 83 --meter 190610004855 --minutes 10
+  bdfetch info
+  bdfetch buildings
+  bdfetch floors --building 1号公寓 --group 003
+  bdfetch rooms --building 1号公寓 --group 003 --floor 1楼
+  bdfetch room --building 1号公寓 --group 003 --floor 1楼 --room <房间> --json
+  bdfetch meter --meter <表号> --detail --no-dump --json
 """
 
 from __future__ import annotations
@@ -25,20 +24,27 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
+from electricity.changan import (
+    AREA_ID,
+    AREA_NAME,
+    CAMPUS_ROOT,
+    get_school,
+    load_profile,
+)
 from electricity.client import DEFAULT_BASE
 from electricity.meter import pretty_print_meter, query_meter
 from electricity.room import (
     detect_campus_root,
-    list_buildings,
     list_floors,
     list_rooms,
     load_export_state,
+    match_building,
+    match_floor,
     new_login_session,
     query_room,
     save_export,
     scan_floor,
 )
-from electricity.schools import get_school, list_schools, resolve_school, school_table_rows
 from electricity.util import save_result
 
 
@@ -52,155 +58,57 @@ def _json_out(data: Any, out: Optional[str] = None, *, indent: int = 2) -> None:
         print(text)
 
 
-def _add_school_args(p: argparse.ArgumentParser, *, default_id: str = "83") -> None:
+def _add_group_arg(p: argparse.ArgumentParser) -> None:
     p.add_argument(
-        "--school",
-        "--school-id",
-        dest="school_id",
+        "--group",
         default=None,
-        help=f"学校 id（见 schools 子命令；默认 {default_id}）",
-    )
-    p.add_argument(
-        "--school-name",
-        default=None,
-        help="学校名称（可模糊；与 --school 二选一）",
-    )
-    p.add_argument(
-        "--area-id",
-        default=None,
-        help=argparse.SUPPRESS,  # 兼容旧参数
-    )
-    p.add_argument(
-        "--area-name",
-        default=None,
-        help=argparse.SUPPRESS,
+        help="楼栋分组：003=北院、004=东院、005=西院、006/007=渭水校区、008=混合",
     )
 
 
-def _resolve_from_args(args: argparse.Namespace, default_id: str = "83") -> dict[str, Any]:
-    sid = args.school_id or getattr(args, "area_id", None)
-    sname = args.school_name or getattr(args, "area_name", None)
-    if sid is None and sname is None:
-        sid = default_id
-    return resolve_school(sid, sname, default_id=default_id)
-
-
-def cmd_schools(args: argparse.Namespace) -> int:
-    schools = list_schools(
-        query=args.query,
-        only_bill=args.only_bill,
-        only_detail=args.only_detail,
-    )
-    if args.json:
-        reg = {
-            "count": len(schools),
-            "updated_at": None,
-            "schools": schools,
-        }
-        try:
-            from electricity.schools import load_registry
-
-            reg["updated_at"] = load_registry().get("updated_at")
-        except Exception:
-            pass
-        _json_out(reg, args.out)
-        return 0
-
-    rows = school_table_rows(schools)
-    if not rows:
-        print("没有匹配的学校。", file=sys.stderr)
-        return 1
-
-    # 表格
-    print(f"支持的 full 学校：{len(rows)} 所（表号+余额；部分学校账单 N）\n")
-    print(f"{'ID':>5}  {'余额':^4} {'账单':^4} {'明细':^4}  名称")
-    print("-" * 72)
-    for r in rows:
-        print(
-            f"{r['id']:>5}  {r['balance']:^4} {r['bill']:^4} {r['detail']:^4}  {r['name']}"
-        )
-    if args.verbose:
-        print("\n样例表号 / campus_root：")
-        for r in rows:
-            if r["sample_meter"]:
-                print(
-                    f"  {r['id']:>5}  root={r['campus_root']:<14} meter={r['sample_meter']}"
-                )
-    print(
-        "\n用法: bdfetch meter --school <ID> --meter <表号>\n"
-        "      bdfetch schools --query 江西"
-    )
-    if args.out:
-        save_result({"count": len(rows), "schools": schools}, args.out)
-        print(f"JSON → {args.out}", file=sys.stderr)
+def cmd_info(args: argparse.Namespace) -> int:
+    profile = load_profile()
+    payload = {
+        "school": get_school(),
+        "capabilities": profile.get("capabilities"),
+        "counts": profile.get("counts"),
+        "groups": profile.get("groups"),
+        "id_rule": profile.get("id_rule"),
+        "notes": profile.get("notes"),
+        "apis": {
+            "buildings": "bdfetch buildings",
+            "floors": "bdfetch floors --building <楼栋> [--group 003]",
+            "rooms": "bdfetch rooms --building <楼栋> --floor <楼层> [--group 003]",
+            "room_to_meter": (
+                "bdfetch room --building <楼栋> --floor <楼层> --room <房间> [--group 003]"
+            ),
+            "balance": "bdfetch meter --meter <表号>",
+            "bill": "bdfetch meter --meter <表号>",
+            "detail": "bdfetch meter --meter <表号> --detail",
+            "monitor": "bdfetch monitor --meter <表号> --minutes 15 --interval 30",
+        },
+        "base_url": args.base,
+        "oauth_required": False,
+    }
+    _json_out(payload, args.out)
     return 0
 
 
-def cmd_meter(args: argparse.Namespace) -> int:
-    school = _resolve_from_args(args)
-    if not args.meter:
-        print("请指定 --meter 表号", file=sys.stderr)
-        return 1
-
-    known = get_school(school["id"])
-    if known is None and not args.force:
-        print(
-            f"警告: 学校 id={school['id']} 不在 55 所 full 列表中，"
-            f"仍将尝试查询（--force 可静默）。",
-            file=sys.stderr,
-        )
-
-    print(
-        f"== 表号直查 ==  {school.get('name')} (id={school['id']})  meter={args.meter}",
-        file=sys.stderr,
-    )
+def cmd_buildings(args: argparse.Namespace) -> int:
     try:
-        result = query_meter(
-            args.meter,
-            area_id=str(school["id"]),
-            area_name=str(school.get("name") or ""),
-            month=args.month,
-            dump_dir=None if args.no_dump else args.dump_html,
-            base=args.base,
-            timeout=args.timeout,
-            include_bill=not args.no_bill,
-            include_detail=bool(args.detail),
+        s = new_login_session(base=args.base, timeout=args.timeout)
+        root, buildings = detect_campus_root(
+            s, preferred=args.campus_id, base=args.base, timeout=args.timeout
         )
     except Exception as exc:  # noqa: BLE001
         print(f"查询失败: {exc}", file=sys.stderr)
-        return 1
-
-    if args.json:
-        _json_out(result, args.out)
-    else:
-        pretty_print_meter(result)
-        if args.out:
-            path = save_result(result, args.out)
-            print(f"JSON → {path}")
-        if not args.no_dump:
-            print(f"HTML → {args.dump_html}")
-
-    return 0 if result.get("ok") else 2
-
-
-def cmd_buildings(args: argparse.Namespace) -> int:
-    school = _resolve_from_args(args)
-    s = new_login_session(
-        area_id=str(school["id"]),
-        area_name=str(school.get("name") or ""),
-        base=args.base,
-        timeout=args.timeout,
-    )
-    preferred = args.campus_id or school.get("campus_root")
-    root, buildings = detect_campus_root(
-        s, preferred=preferred, base=args.base, timeout=args.timeout
-    )
+        return 2
     if not buildings:
         print("未获取到楼栋列表（级联失败）", file=sys.stderr)
         return 2
     payload = {
-        "area_id": school["id"],
-        "area_name": school.get("name"),
+        "area_id": AREA_ID,
+        "area_name": AREA_NAME,
         "campus_root": root,
         "count": len(buildings),
         "buildings": buildings,
@@ -209,39 +117,29 @@ def cmd_buildings(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_floors(args: argparse.Namespace) -> int:
-    school = _resolve_from_args(args)
-    if not args.building:
-        print("请指定 --building", file=sys.stderr)
-        return 1
-    s = new_login_session(
-        area_id=str(school["id"]),
-        area_name=str(school.get("name") or ""),
-        base=args.base,
-        timeout=args.timeout,
-    )
-    preferred = args.campus_id or school.get("campus_root")
+def _load_cascade(args: argparse.Namespace) -> tuple[Any, str, dict, list[dict]]:
+    s = new_login_session(base=args.base, timeout=args.timeout)
     root, buildings = detect_campus_root(
-        s, preferred=preferred, base=args.base, timeout=args.timeout
+        s, preferred=args.campus_id, base=args.base, timeout=args.timeout
     )
-    if not root:
-        print("无法探测 campus_root", file=sys.stderr)
-        return 2
-    b = next(
-        (x for x in buildings if x["name"] == args.building or args.building in x["name"]),
-        None,
-    )
-    if not b:
-        print(
-            f"找不到楼栋 {args.building!r}，可选: {[x['name'] for x in buildings[:40]]}",
-            file=sys.stderr,
-        )
-        return 1
+    if not root or not buildings:
+        raise RuntimeError("无法探测 campus_root / 楼栋列表为空")
+    b = match_building(buildings, args.building, args.group)
     floors = list_floors(s, b["id"], base=args.base, timeout=args.timeout)
+    return s, root, b, floors
+
+
+def cmd_floors(args: argparse.Namespace) -> int:
+    try:
+        _s, root, b, floors = _load_cascade(args)
+    except Exception as exc:  # noqa: BLE001
+        print(f"查询失败: {exc}", file=sys.stderr)
+        return 2
     payload = {
-        "area_id": school["id"],
-        "building": b,
+        "area_id": AREA_ID,
+        "area_name": AREA_NAME,
         "campus_root": root,
+        "building": b,
         "count": len(floors),
         "floors": floors,
     }
@@ -250,47 +148,19 @@ def cmd_floors(args: argparse.Namespace) -> int:
 
 
 def cmd_rooms(args: argparse.Namespace) -> int:
-    school = _resolve_from_args(args)
-    if not args.building or not args.floor:
-        print("请指定 --building 与 --floor", file=sys.stderr)
-        return 1
-    s = new_login_session(
-        area_id=str(school["id"]),
-        area_name=str(school.get("name") or ""),
-        base=args.base,
-        timeout=args.timeout,
-    )
-    preferred = args.campus_id or school.get("campus_root")
-    root, buildings = detect_campus_root(
-        s, preferred=preferred, base=args.base, timeout=args.timeout
-    )
-    if not root:
-        print("无法探测 campus_root", file=sys.stderr)
+    try:
+        s, root, b, floors = _load_cascade(args)
+        f = match_floor(floors, args.floor)
+        rooms = list_rooms(s, f["id"], base=args.base, timeout=args.timeout)
+    except Exception as exc:  # noqa: BLE001
+        print(f"查询失败: {exc}", file=sys.stderr)
         return 2
-    b = next(
-        (x for x in buildings if x["name"] == args.building or args.building in x["name"]),
-        None,
-    )
-    if not b:
-        print(f"找不到楼栋 {args.building!r}", file=sys.stderr)
-        return 1
-    floors = list_floors(s, b["id"], base=args.base, timeout=args.timeout)
-    f = next(
-        (x for x in floors if args.floor == x["name"] or args.floor in x["name"]),
-        None,
-    )
-    if not f:
-        print(
-            f"找不到楼层 {args.floor!r}，可选: {[x['name'] for x in floors]}",
-            file=sys.stderr,
-        )
-        return 1
-    rooms = list_rooms(s, f["id"], base=args.base, timeout=args.timeout)
     payload = {
-        "area_id": school["id"],
+        "area_id": AREA_ID,
+        "area_name": AREA_NAME,
+        "campus_root": root,
         "building": b,
         "floor": f,
-        "campus_root": root,
         "count": len(rooms),
         "rooms": rooms,
     }
@@ -299,17 +169,13 @@ def cmd_rooms(args: argparse.Namespace) -> int:
 
 
 def cmd_room(args: argparse.Namespace) -> int:
-    school = _resolve_from_args(args)
-
     if args.scan_floor:
         if not args.building or not args.floor:
             print("--scan-floor 需要 --building 与 --floor", file=sys.stderr)
             return 1
         out_path = Path(args.out or "output/room_meters.json")
-        existing, skip = load_export_state(out_path) if args.resume else ([], set())
-        by_key = {
-            f"{r['building']}|{r['floor']}|{r['room']}": r for r in existing
-        }
+        existing, _skip = load_export_state(out_path) if args.resume else ([], set())
+        by_key = {f"{r['building']}|{r['floor']}|{r['room']}": r for r in existing}
 
         def on_record(rec: dict[str, str]) -> None:
             k = f"{rec['building']}|{rec['floor']}|{rec['room']}"
@@ -318,8 +184,9 @@ def cmd_room(args: argparse.Namespace) -> int:
                 out_path,
                 list(by_key.values()),
                 meta={
-                    "area_id": school["id"],
-                    "area_name": school.get("name"),
+                    "area_id": AREA_ID,
+                    "area_name": AREA_NAME,
+                    "group": args.group,
                     "building": args.building,
                     "floor": args.floor,
                 },
@@ -327,12 +194,11 @@ def cmd_room(args: argparse.Namespace) -> int:
 
         try:
             part = scan_floor(
-                area_id=str(school["id"]),
-                area_name=str(school.get("name") or ""),
                 building=args.building,
                 floor=args.floor,
+                group=args.group,
                 campus=args.campus,
-                campus_id=args.campus_id or school.get("campus_root"),
+                campus_id=args.campus_id or CAMPUS_ROOT,
                 base=args.base,
                 timeout=args.timeout,
                 limit=args.limit,
@@ -341,15 +207,16 @@ def cmd_room(args: argparse.Namespace) -> int:
             )
         except Exception as exc:  # noqa: BLE001
             print(f"扫描失败: {exc}", file=sys.stderr)
-            return 1
+            return 2
         for rec in part:
             by_key[f"{rec['building']}|{rec['floor']}|{rec['room']}"] = rec
         save_export(
             out_path,
             list(by_key.values()),
             meta={
-                "area_id": school["id"],
-                "area_name": school.get("name"),
+                "area_id": AREA_ID,
+                "area_name": AREA_NAME,
+                "group": args.group,
                 "building": args.building,
                 "floor": args.floor,
             },
@@ -366,26 +233,27 @@ def cmd_room(args: argparse.Namespace) -> int:
 
     try:
         result = query_room(
-            area_id=str(school["id"]),
-            area_name=str(school.get("name") or ""),
             building=args.building,
             floor=args.floor,
             room=args.room,
+            group=args.group,
             campus=args.campus,
-            campus_id=args.campus_id or school.get("campus_root"),
+            campus_id=args.campus_id or CAMPUS_ROOT,
             base=args.base,
             timeout=args.timeout,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"查询失败: {exc}", file=sys.stderr)
-        return 1
+        return 2
 
     if args.json or not result.get("meter"):
         _json_out(result, args.out)
     else:
         rec = {
-            "area_id": school["id"],
-            "area_name": school.get("name"),
+            "area_id": AREA_ID,
+            "area_name": AREA_NAME,
+            "group": (result.get("path") or {}).get("group"),
+            "group_area": (result.get("path") or {}).get("group_area"),
             "building": (result.get("path") or {}).get("building") or args.building,
             "floor": (result.get("path") or {}).get("floor") or args.floor,
             "room": (result.get("path") or {}).get("room") or args.room,
@@ -400,8 +268,6 @@ def cmd_room(args: argparse.Namespace) -> int:
             print("\n-- 继续查余额 --", file=sys.stderr)
             bal = query_meter(
                 str(result["meter"]),
-                area_id=str(school["id"]),
-                area_name=str(school.get("name") or ""),
                 base=args.base,
                 timeout=args.timeout,
                 include_bill=True,
@@ -413,16 +279,43 @@ def cmd_room(args: argparse.Namespace) -> int:
     return 0 if result.get("meter") or result.get("ok") else 2
 
 
-def cmd_monitor(args: argparse.Namespace) -> int:
-    school = _resolve_from_args(args)
-    if not args.meter:
-        print("请指定 --meter", file=sys.stderr)
-        return 1
+def cmd_meter(args: argparse.Namespace) -> int:
+    print(
+        f"== 长安大学表号直查 ==  meter={args.meter}",
+        file=sys.stderr,
+    )
+    try:
+        result = query_meter(
+            args.meter,
+            month=args.month,
+            dump_dir=None if args.no_dump else args.dump_html,
+            base=args.base,
+            timeout=args.timeout,
+            include_bill=not args.no_bill,
+            include_detail=bool(args.detail),
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"查询失败: {exc}", file=sys.stderr)
+        return 2
 
+    if args.json:
+        _json_out(result, args.out)
+    else:
+        pretty_print_meter(result)
+        if args.out:
+            path = save_result(result, args.out)
+            print(f"JSON → {path}")
+        if not args.no_dump:
+            print(f"HTML → {args.dump_html}")
+
+    return 0 if result.get("ok") else 2
+
+
+def cmd_monitor(args: argparse.Namespace) -> int:
     deadline = datetime.now() + timedelta(minutes=args.minutes)
     samples: list[dict[str, Any]] = []
     print(
-        f"监控 {school.get('name')} meter={args.meter} "
+        f"监控 长安大学 meter={args.meter} "
         f"每 {args.interval}s，共 {args.minutes} 分钟",
         file=sys.stderr,
     )
@@ -430,8 +323,6 @@ def cmd_monitor(args: argparse.Namespace) -> int:
         try:
             r = query_meter(
                 args.meter,
-                area_id=str(school["id"]),
-                area_name=str(school.get("name") or ""),
                 base=args.base,
                 timeout=args.timeout,
                 include_bill=False,
@@ -439,7 +330,11 @@ def cmd_monitor(args: argparse.Namespace) -> int:
                 dump_dir=None,
             )
         except Exception as exc:  # noqa: BLE001
-            r = {"ok": False, "error": str(exc), "queried_at": datetime.now().isoformat()}
+            r = {
+                "ok": False,
+                "error": str(exc),
+                "queried_at": datetime.now().isoformat(),
+            }
         b = r.get("balance") or {}
         row = {
             "t": r.get("queried_at") or datetime.now().isoformat(timespec="seconds"),
@@ -461,8 +356,8 @@ def cmd_monitor(args: argparse.Namespace) -> int:
         time.sleep(args.interval)
 
     payload = {
-        "area_id": school["id"],
-        "area_name": school.get("name"),
+        "area_id": AREA_ID,
+        "area_name": AREA_NAME,
         "meter": args.meter,
         "interval_s": args.interval,
         "minutes": args.minutes,
@@ -474,55 +369,20 @@ def cmd_monitor(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_info(args: argparse.Namespace) -> int:
-    """单校能力摘要。"""
-    school = _resolve_from_args(args)
-    known = get_school(school["id"])
-    payload = {
-        "school": known or school,
-        "in_full_list": known is not None,
-        "apis": {
-            "meter_balance": "bdfetch meter --school {id} --meter <表号>",
-            "meter_bill": "同上（默认含月账单；部分校 bill=N）",
-            "meter_detail": "bdfetch meter --school {id} --meter <表号> --detail",
-            "room_to_meter": "bdfetch room --school {id} --building .. --floor .. --room ..",
-            "list_buildings": "bdfetch buildings --school {id}",
-        },
-        "flow": [
-            "GET  /?id={areaId}",
-            "POST /selectarea {areaId, areaName}",
-            "POST /selectmeter {comAddress, hidType:电表}",
-            "GET  /meter_main          # 余额 yffye/zydl",
-            "GET  /electricbill        # 月账单",
-            "POST /electricdetail      # 日明细（必须 POST）",
-            "POST /getB + /login       # 房间级联 → 表号",
-        ],
-        "base_url": args.base or DEFAULT_BASE,
-        "oauth_required": False,
-        "note": "表号会话即可；充值流水等仍需微信 OAuth（本 CLI 不覆盖）",
-    }
-    # 填 id
-    for k, v in list(payload["apis"].items()):
-        payload["apis"][k] = v.replace("{id}", str(school["id"]))
-    _json_out(payload, args.out)
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bdfetch",
-        description="北电智慧水电统一查询 CLI（55 所 full 学校 · 免微信 OAuth）",
+        description="长安大学（bd.bdfairy.cn areaId=65）电表查询 CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 常用示例:
-  bdfetch schools
-  bdfetch schools --query 江西
-  bdfetch info --school 83
-  bdfetch meter --school 83 --meter 190610004855
-  bdfetch meter --school 80 --meter 220311002165 --detail --json
-  bdfetch buildings --school 83
-  bdfetch room --school 83 --building 2栋 --floor 3楼 --room S305 --with-balance
-  bdfetch monitor --school 83 --meter 190610004855 --minutes 5 --interval 30
+  bdfetch info
+  bdfetch buildings
+  bdfetch floors --building 1号公寓 --group 003
+  bdfetch rooms  --building 1号公寓 --group 003 --floor 1楼
+  bdfetch room   --building 1号公寓 --group 003 --floor 1楼 --room <房间> --json
+  bdfetch meter  --meter <表号> --detail --no-dump --json
+  bdfetch monitor --meter <表号> --minutes 15 --interval 30
 
 等价入口: python -m electricity <子命令> ...
         """.strip(),
@@ -536,66 +396,41 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    # schools
-    p = sub.add_parser("schools", help="列出支持的 55 所 full 学校")
-    p.add_argument("--query", "-q", default=None, help="按 id 或名称过滤")
-    p.add_argument("--only-bill", action="store_true", help="仅账单可用的学校")
-    p.add_argument("--only-detail", action="store_true", help="仅明细可用的学校")
-    p.add_argument("--json", action="store_true")
-    p.add_argument("--verbose", "-v", action="store_true")
-    p.add_argument("--out", default=None)
-    p.set_defaults(func=cmd_schools)
-
-    # info
-    p = sub.add_parser("info", help="查看某校能力与推荐命令")
-    _add_school_args(p)
+    p = sub.add_parser("info", help="长安大学能力、分组与代号规则")
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_info)
 
-    # meter
-    p = sub.add_parser("meter", help="表号直查余额/月账单/日明细")
-    _add_school_args(p)
-    p.add_argument("--meter", "-m", required=True, help="电表表号 comAddress")
-    p.add_argument("--month", default=None, help="账单/明细月份 YYYY-MM")
-    p.add_argument("--detail", action="store_true", help="额外拉日用电明细")
-    p.add_argument("--no-bill", action="store_true", help="不拉月账单")
-    p.add_argument("--json", action="store_true", help="只输出 JSON")
-    p.add_argument("--out", default="output/meter_query.json")
-    p.add_argument("--dump-html", default="output/html")
-    p.add_argument("--no-dump", action="store_true")
-    p.add_argument("--force", action="store_true", help="非 full 列表学校不警告")
-    p.set_defaults(func=cmd_meter)
-
-    # buildings / floors / rooms
-    p = sub.add_parser("buildings", help="列出楼栋（房间级联第一级）")
-    _add_school_args(p)
-    p.add_argument("--campus-id", default=None, help="覆盖 campus_root（bID）")
+    p = sub.add_parser("buildings", help="列出楼栋（按 BuildingID 去重）")
+    p.add_argument(
+        "--campus-id",
+        default=None,
+        help=f"覆盖 campus_root（默认 {CAMPUS_ROOT}）",
+    )
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_buildings)
 
     p = sub.add_parser("floors", help="列出某楼栋的楼层")
-    _add_school_args(p)
-    p.add_argument("--building", required=True)
+    p.add_argument("--building", required=True, help="楼栋名或 15 位 ID")
+    _add_group_arg(p)
     p.add_argument("--campus-id", default=None)
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_floors)
 
     p = sub.add_parser("rooms", help="列出某层的房间")
-    _add_school_args(p)
     p.add_argument("--building", required=True)
     p.add_argument("--floor", required=True)
+    _add_group_arg(p)
     p.add_argument("--campus-id", default=None)
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_rooms)
 
-    # room query
     p = sub.add_parser("room", help="房间 → 表号（可再查余额）")
-    _add_school_args(p)
     p.add_argument("--building", default=None)
     p.add_argument("--floor", default=None)
     p.add_argument("--room", default=None)
-    p.add_argument("--campus", default=None, help="buildingInfo 前缀（默认=校名）")
-    p.add_argument("--campus-id", default=None, help="覆盖 campus_root")
+    _add_group_arg(p)
+    p.add_argument("--campus", default=None, help="buildingInfo 前缀（默认 长安大学）")
+    p.add_argument("--campus-id", default=None)
     p.add_argument("--scan-floor", action="store_true", help="扫整层房间→表号")
     p.add_argument("--resume", action="store_true")
     p.add_argument("--limit", type=int, default=0)
@@ -604,9 +439,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_room)
 
-    # monitor
-    p = sub.add_parser("monitor", help="短时轮询余额（推送/曲线数据源）")
-    _add_school_args(p)
+    p = sub.add_parser("meter", help="表号 → 余额/月账单/日明细")
+    p.add_argument("--meter", "-m", required=True, help="电表表号 comAddress")
+    p.add_argument("--month", default=None, help="账单/明细月份 YYYY-MM")
+    p.add_argument("--detail", action="store_true", help="额外拉日用电明细")
+    p.add_argument("--no-bill", action="store_true", help="不拉月账单")
+    p.add_argument("--json", action="store_true", help="只输出 JSON")
+    p.add_argument("--out", default="output/meter_query.json")
+    p.add_argument("--dump-html", default="output/html")
+    p.add_argument("--no-dump", action="store_true")
+    p.set_defaults(func=cmd_meter)
+
+    p = sub.add_parser("monitor", help="短时轮询余额")
     p.add_argument("--meter", "-m", required=True)
     p.add_argument("--minutes", type=float, default=15)
     p.add_argument("--interval", type=float, default=30, help="秒")

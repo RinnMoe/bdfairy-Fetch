@@ -1,12 +1,13 @@
-"""匿名会话：入口 Cookie + 选校 + 必要时解绑（无需微信登录）。"""
+"""长安大学匿名会话：入口 Cookie + 选校 + 必要时解绑（无需微信登录）。"""
 
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 import requests
 
+from .changan import AREA_ID, AREA_NAME
 from .client import DEFAULT_BASE, WECHAT_UA
 
 
@@ -61,8 +62,8 @@ def new_session(*, timeout: float = 20.0) -> requests.Session:
 def selectarea(
     s: requests.Session,
     *,
-    area_id: str,
-    area_name: str,
+    area_id: str = AREA_ID,
+    area_name: str = AREA_NAME,
     base: str = DEFAULT_BASE,
     timeout: float = 20.0,
 ) -> dict[str, Any]:
@@ -84,8 +85,8 @@ def maybe_unbind(
     s: requests.Session,
     sa: dict[str, Any],
     *,
-    area_id: str,
-    area_name: str,
+    area_id: str = AREA_ID,
+    area_name: str = AREA_NAME,
     base: str = DEFAULT_BASE,
     timeout: float = 20.0,
 ) -> tuple[requests.Session, dict[str, Any]]:
@@ -123,8 +124,8 @@ def maybe_unbind(
 
 def bootstrap_area(
     *,
-    area_id: str,
-    area_name: str,
+    area_id: str = AREA_ID,
+    area_name: str = AREA_NAME,
     base: str = DEFAULT_BASE,
     timeout: float = 20.0,
     unbind_if_bound: bool = True,

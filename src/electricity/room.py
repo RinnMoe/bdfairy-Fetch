@@ -1,4 +1,4 @@
-"""房间级联：校区 → 楼栋 → 楼层 → 房间 → 表号（无需微信 OAuth）。"""
+"""长安大学房间级联：根 → 分组 → 楼栋 → 楼层 → 房间 → 表号（无需微信 OAuth）。"""
 
 from __future__ import annotations
 
@@ -12,23 +12,9 @@ from typing import Any, Callable, Optional
 
 import requests
 
+from .changan import AREA_ID, AREA_NAME, CAMPUS_ROOT, group_areas
 from .client import DEFAULT_BASE
 from .session import bootstrap_area, decode_body, headers_json, jload
-
-
-ROOT_CANDIDATES = (
-    "001001",
-    "001000001",
-    "001002",
-    "001000",
-    "001003",
-    "001",
-    "001000000001",
-    "002001",
-    "003001",
-    "022",
-    "615",
-)
 
 
 def now_iso() -> str:
@@ -56,12 +42,40 @@ def getb(
 
 
 def extract_meters(html: str) -> list[str]:
+    """从 /selectmeter 页面提取表号。
+
+    长安大学页面把设备列表内嵌为
+    ``const data = ref(JSON.parse('[{"comAddress":"...",...}]'))``；
+    这里用正则兼容该 JSON 串，无需执行 JS。
+    """
     found: set[str] = set()
     for m in re.findall(r"comAddress['\"\s:=\)]+['\"]?(\d{8,})", html):
         found.add(m)
     for m in re.findall(r"['\"]comAddress['\"]\s*:\s*['\"](\d+)['\"]", html):
         found.add(m)
     return sorted(found)
+
+
+def _building_rows(data: dict) -> list[dict]:
+    """把 /getB 的 floor 数组规范化为楼栋列表，并按 BuildingID 去重。"""
+    out: list[dict] = []
+    seen: set[str] = set()
+    areas = group_areas()
+    for x in (data or {}).get("floor") or []:
+        bid = str(x.get("BuildingID") or "").strip()
+        if not bid or bid in seen:
+            continue
+        seen.add(bid)
+        group = bid[6:9] if len(bid) >= 9 else ""
+        out.append(
+            {
+                "name": (x.get("BuildingName") or "").strip(),
+                "id": bid,
+                "group": group,
+                "group_area": areas.get(group, ""),
+            }
+        )
+    return out
 
 
 def detect_campus_root(
@@ -71,45 +85,44 @@ def detect_campus_root(
     base: str = DEFAULT_BASE,
     timeout: float = 15.0,
 ) -> tuple[Optional[str], list[dict]]:
-    """尝试 campus_root 候选，返回第一个能列出楼栋的 root。"""
-    ordered: list[str] = []
-    for c in ([preferred] if preferred else []) + list(ROOT_CANDIDATES):
-        if c and c not in ordered:
-            ordered.append(c)
-    for root in ordered:
+    """查询 campus_root；长安大学固定为 001000，preferred 可覆盖。"""
+    roots: list[str] = []
+    for root in (preferred, CAMPUS_ROOT):
+        if root and root not in roots:
+            roots.append(root)
+    for root in roots:
         try:
             data = getb(s, {"bID": root}, base=base, timeout=min(timeout, 12.0))
         except Exception:
             continue
-        floors = data.get("floor") if isinstance(data, dict) else None
-        if not floors:
-            continue
-        buildings = [
-            {
-                "name": (x.get("BuildingName") or "").strip(),
-                "id": x.get("BuildingID"),
-            }
-            for x in floors
-            if x.get("BuildingID")
-        ]
+        buildings = _building_rows(data)
         if buildings:
             return root, buildings
     return None, []
 
 
+def resolve_campus_root(
+    s: requests.Session,
+    *,
+    preferred: Optional[str] = None,
+    base: str = DEFAULT_BASE,
+    timeout: float = 20.0,
+) -> Optional[str]:
+    """返回可用的 campus_root：优先 preferred，回退长安大学 001000。"""
+    root, _ = detect_campus_root(s, preferred=preferred, base=base, timeout=timeout)
+    return root or preferred or CAMPUS_ROOT
+
+
 def list_buildings(
     s: requests.Session,
-    campus_id: str,
+    campus_id: str = CAMPUS_ROOT,
     *,
     base: str = DEFAULT_BASE,
     timeout: float = 20.0,
 ) -> list[dict]:
+    """列出楼栋；根接口有重复条目，返回前按 BuildingID 去重。"""
     data = getb(s, {"bID": campus_id}, base=base, timeout=timeout)
-    return [
-        {"name": (x.get("BuildingName") or "").strip(), "id": x.get("BuildingID")}
-        for x in (data.get("floor") or [])
-        if x.get("BuildingID")
-    ]
+    return _building_rows(data)
 
 
 def list_floors(
@@ -144,8 +157,8 @@ def list_rooms(
 
 def new_login_session(
     *,
-    area_id: str,
-    area_name: str,
+    area_id: str = AREA_ID,
+    area_name: str = AREA_NAME,
     base: str = DEFAULT_BASE,
     timeout: float = 20.0,
 ) -> requests.Session:
@@ -159,36 +172,79 @@ def new_login_session(
     return s
 
 
+def _format_buildings(rows: list[dict]) -> str:
+    def label(b: dict) -> str:
+        area = b.get("group_area") or b.get("group") or "?"
+        return f"{area}/{b.get('name')}({b.get('id')})"
+
+    return ", ".join(label(b) for b in rows)
+
+
+def match_building(
+    buildings: list[dict],
+    key: str,
+    group: Optional[str] = None,
+) -> dict:
+    """按楼栋 ID / 名称匹配；同名楼栋需用 group 消歧。"""
+    key = str(key).strip()
+    group_key = str(group).strip().zfill(3) if group else None
+    rows = [
+        b
+        for b in buildings
+        if not group_key or str(b.get("group")) == group_key
+    ]
+    if not rows:
+        raise ValueError(f"分组 {group!r} 下没有楼栋")
+
+    exact = [b for b in rows if str(b.get("id")) == key or b.get("name") == key]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        raise ValueError("楼栋不唯一，请用 --group 指定: " + _format_buildings(exact))
+
+    fuzzy = [b for b in rows if key in str(b.get("name") or "")]
+    if len(fuzzy) == 1:
+        return fuzzy[0]
+    if len(fuzzy) > 1:
+        raise ValueError("楼栋匹配多个，请用 --group 指定: " + _format_buildings(fuzzy))
+
+    raise ValueError(f"找不到楼栋 {key!r}，可选: " + _format_buildings(rows[:30]))
+
+
+def match_floor(floors: list[dict], key: str) -> dict:
+    key = str(key).strip()
+    exact = [f for f in floors if str(f.get("id")) == key or f.get("name") == key]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        raise ValueError(f"楼层 {key!r} 不唯一: {[f['name'] for f in exact]}")
+
+    fuzzy = [f for f in floors if key in str(f.get("name") or "")]
+    if len(fuzzy) == 1:
+        return fuzzy[0]
+    if len(fuzzy) > 1:
+        raise ValueError(f"楼层 {key!r} 匹配多个: {[f['name'] for f in fuzzy]}")
+
+    raise ValueError(f"找不到楼层 {key!r}，可选: {[f['name'] for f in floors]}")
+
+
 def resolve_path(
     s: requests.Session,
     *,
     building: str,
     floor: str,
     room: Optional[str] = None,
-    campus_id: str,
-    campus: str = "",
+    group: Optional[str] = None,
+    campus_id: str = CAMPUS_ROOT,
+    campus: str = AREA_NAME,
     base: str = DEFAULT_BASE,
     timeout: float = 20.0,
 ) -> dict[str, Any]:
     buildings = list_buildings(s, campus_id, base=base, timeout=timeout)
-    b = next((x for x in buildings if x["name"] == building), None)
-    if not b:
-        # 模糊
-        b = next((x for x in buildings if building in x["name"]), None)
-    if not b:
-        raise ValueError(
-            f"找不到楼栋 {building!r}，可选: {[x['name'] for x in buildings[:30]]}"
-        )
+    b = match_building(buildings, building, group)
 
     floors = list_floors(s, b["id"], base=base, timeout=timeout)
-    f = next(
-        (x for x in floors if floor == x["name"] or floor in x["name"]),
-        None,
-    )
-    if not f:
-        raise ValueError(
-            f"找不到楼层 {floor!r}，可选: {[x['name'] for x in floors]}"
-        )
+    f = match_floor(floors, floor)
 
     rooms = list_rooms(s, f["id"], base=base, timeout=timeout)
     out: dict[str, Any] = {
@@ -199,12 +255,12 @@ def resolve_path(
         "rooms": rooms,
     }
     if room:
-        rname = room.replace("房", "")
+        rname = str(room).replace("房", "").strip()
         rm = next(
             (
                 x
                 for x in rooms
-                if rname == x["name"].replace("房", "") or rname in x["name"]
+                if rname == str(x["name"]).replace("房", "") or rname in str(x["name"])
             ),
             None,
         )
@@ -224,11 +280,11 @@ def bind_room_get_meters(
     floor_name: str,
     room_name: str,
     building_id: str,
-    area_name: str = "",
+    area_name: str = AREA_NAME,
     base: str = DEFAULT_BASE,
     timeout: float = 20.0,
 ) -> dict[str, Any]:
-    """POST /login 绑房后读 selectmeter HTML 取表号。"""
+    """POST /login 绑房后读 /selectmeter 页面取表号。"""
     base = base.rstrip("/")
     candidates = [
         f"{campus}|{building_name}|{floor_name}|{room_name}" if campus else "",
@@ -297,34 +353,35 @@ def bind_room_get_meters(
 
 def query_room(
     *,
-    area_id: str,
-    area_name: str,
     building: str,
     floor: str,
     room: str,
+    group: Optional[str] = None,
     campus: Optional[str] = None,
     campus_id: Optional[str] = None,
+    area_id: str = AREA_ID,
+    area_name: str = AREA_NAME,
     base: str = DEFAULT_BASE,
     timeout: float = 20.0,
 ) -> dict[str, Any]:
+    """长安大学：房间 → 表号。"""
     s = new_login_session(
         area_id=area_id, area_name=area_name, base=base, timeout=timeout
     )
-    root = campus_id
+    root = resolve_campus_root(s, preferred=campus_id, base=base, timeout=timeout)
     if not root:
-        root, _ = detect_campus_root(s, base=base, timeout=timeout)
-        if not root:
-            return {
-                "ok": False,
-                "error": "无法探测 campus_root / 楼栋列表为空",
-                "meters": [],
-            }
+        return {
+            "ok": False,
+            "error": "无法探测 campus_root / 楼栋列表为空",
+            "meters": [],
+        }
     campus_label = campus or area_name
     path = resolve_path(
         s,
         building=building,
         floor=floor,
         room=room,
+        group=group,
         campus_id=root,
         campus=campus_label,
         base=base,
@@ -346,6 +403,8 @@ def query_room(
     result["area_name"] = area_name
     result["campus_id"] = root
     result["path"] = {
+        "group": path["building"].get("group"),
+        "group_area": path["building"].get("group_area"),
         "building": path["building"]["name"],
         "floor": path["floor"]["name"],
         "room": rm["name"],
@@ -413,7 +472,12 @@ def load_export_state(path: Path) -> tuple[list[dict[str, str]], set[str]]:
     for r in rows:
         if not isinstance(r, dict):
             continue
-        b, f, room, meter = r.get("building"), r.get("floor"), r.get("room"), r.get("meter")
+        b, f, room, meter = (
+            r.get("building"),
+            r.get("floor"),
+            r.get("room"),
+            r.get("meter"),
+        )
         if b and f and room and meter:
             rec = export_record(
                 building=str(b), floor=str(f), room=str(room), meter=str(meter)
@@ -428,12 +492,13 @@ def load_export_state(path: Path) -> tuple[list[dict[str, str]], set[str]]:
 
 def scan_floor(
     *,
-    area_id: str,
-    area_name: str,
     building: str,
     floor: str,
+    group: Optional[str] = None,
     campus: Optional[str] = None,
     campus_id: Optional[str] = None,
+    area_id: str = AREA_ID,
+    area_name: str = AREA_NAME,
     base: str = DEFAULT_BASE,
     delay: tuple[float, float] = (1.0, 2.5),
     timeout: float = 20.0,
@@ -442,19 +507,19 @@ def scan_floor(
     on_record: Optional[Callable[[dict[str, str]], None]] = None,
     on_empty: Optional[Callable[[str], None]] = None,
 ) -> list[dict[str, str]]:
+    """扫整层房间 → 表号；占位房间直接跳过，避免浪费绑房次数。"""
     s0 = new_login_session(
         area_id=area_id, area_name=area_name, base=base, timeout=timeout
     )
-    root = campus_id
+    root = resolve_campus_root(s0, preferred=campus_id, base=base, timeout=timeout)
     if not root:
-        root, _ = detect_campus_root(s0, base=base, timeout=timeout)
-        if not root:
-            raise RuntimeError("无法探测 campus_root")
+        raise RuntimeError("无法探测 campus_root")
     campus_label = campus or area_name
     path = resolve_path(
         s0,
         building=building,
         floor=floor,
+        group=group,
         campus_id=root,
         campus=campus_label,
         base=base,
@@ -473,6 +538,10 @@ def scan_floor(
         room_name = rm["name"]
         key = f"{building_name}|{floor_name}|{room_name}"
         if key in skip_keys:
+            continue
+        if "充值前请确认" in room_name:
+            skip_keys.add(key)
+            print(f"[{i}/{total}] {key} → 占位房间，跳过", flush=True)
             continue
         try:
             s = new_login_session(

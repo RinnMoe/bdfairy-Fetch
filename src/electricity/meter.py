@@ -1,4 +1,4 @@
-"""表号直查：余额 / 月账单 / 日用电明细（无需微信 OAuth）。"""
+"""长安大学表号直查：余额 / 月账单 / 日用电明细（无需微信 OAuth）。"""
 
 from __future__ import annotations
 
@@ -10,8 +10,9 @@ from typing import Any, Optional
 
 import requests
 
+from .changan import AREA_ID, AREA_NAME
 from .client import DEFAULT_BASE
-from .session import bootstrap_area, decode_body, headers_json, new_session
+from .session import bootstrap_area, decode_body, headers_json
 
 
 def extract_refs(html: str) -> dict[str, str]:
@@ -64,8 +65,8 @@ def extract_detail_comments(html: str) -> Optional[list[dict[str, Any]]]:
 def query_meter(
     meter: str,
     *,
-    area_id: str = "83",
-    area_name: str = "江西师范大学",
+    area_id: str = AREA_ID,
+    area_name: str = AREA_NAME,
     month: Optional[str] = None,
     dump_dir: Optional[str | Path] = None,
     base: str = DEFAULT_BASE,
@@ -75,7 +76,7 @@ def query_meter(
     include_detail: bool = False,
 ) -> dict[str, Any]:
     """
-    表号直查（全 55 所 full 学校通用）。
+    长安大学表号直查。
 
     链路：
       GET  /?id={area_id}
@@ -306,7 +307,7 @@ def query_meter(
 
 
 def pretty_print_meter(result: dict[str, Any]) -> None:
-    print("\n======== 电表直查（无需微信 OAuth）========")
+    print("\n======== 长安大学电表查询 ========")
     print(f"学校: {result.get('area_name')} (id={result.get('area_id')})")
     print(f"表号: {result.get('meter')}")
     print(f"成功: {result.get('ok')}  status={result.get('status')}")

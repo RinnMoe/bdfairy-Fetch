@@ -1,0 +1,79 @@
+{
+  "id": "65",
+  "name": "长安大学",
+  "base_url": "http://bd.bdfairy.cn",
+  "campus_root": "001000",
+  "tier": "full",
+  "verified_at": "2026-11-08T01:30:00+08:00",
+  "capabilities": {
+    "buildings": true,
+    "floors": true,
+    "rooms": true,
+    "room_to_meter": true,
+    "balance": true,
+    "bill": true,
+    "detail": true
+  },
+  "counts": {
+    "building_entries": 116,
+    "building_unique": 88,
+    "groups": 6
+  },
+  "groups": [
+    {
+      "code": "003",
+      "area": "北院",
+      "buildings": 13,
+      "note": "1–12号公寓、西门科技服务1号公寓"
+    },
+    {
+      "code": "004",
+      "area": "东院",
+      "buildings": 5,
+      "note": "3、4、5、8、9号公寓"
+    },
+    {
+      "code": "005",
+      "area": "西院",
+      "buildings": 6,
+      "note": "1、2、3、4、5、7号公寓"
+    },
+    {
+      "code": "006",
+      "area": "渭水校区",
+      "buildings": 26,
+      "note": "1–22号公寓、21A/21B、23A/23B、综合楼"
+    },
+    {
+      "code": "007",
+      "area": "渭水校区",
+      "buildings": 24,
+      "note": "1–22号公寓、21A/21B、综合楼"
+    },
+    {
+      "code": "008",
+      "area": "混合",
+      "buildings": 14,
+      "note": "渭水修建中心、北院花园公寓、南院、东院青年公寓、西院平房等"
+    }
+  ],
+  "id_rule": {
+    "widths": {
+      "root": 6,
+      "group": 3,
+      "building": 6,
+      "floor": 6,
+      "room": 3
+    },
+    "building_serial": "group 内顺序，不是楼号；例如 004 组 3号公寓=000001、4号=000002",
+    "floor_serial": "楼层序号；1楼=000001、2楼=000002",
+    "room_serial": "楼层内顺序，不是房号；101→001、102→002，003组106→005",
+    "placeholder_room": "部分楼栋 1 楼首个房间为「充值前请确认房间」，序号最大（如 036），无表号"
+  },
+  "notes": [
+    "根节点 bID=001000 返回 116 条楼栋，去重后 88 个唯一 BuildingID；按 group 查询会去重。",
+    "绑房后 selectarea 返回 band=1，此时 /getB 返回 500；需 POST /phonejcbd 解绑后重试。",
+    "非微信 UA 的 GET /?id=65 会 302 到微信 OAuth；API 链路使用 MicroMessenger UA。",
+    "房间地址字段 roomaddr 返回 undefined，balance.room 为 null。"
+  ]
+}
