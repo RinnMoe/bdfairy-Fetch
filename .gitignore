@@ -51,8 +51,8 @@ output/
 Thumbs.db
 desktop.ini
 
-# 探索用临时文件
-_*.py
-_*.html
-_*.js
+# 探索用临时文件（只匹配仓库根目录，避免误伤 __init__.py / __main__.py）
+/_*.py
+/_*.html
+/_*.js
 *.html.bak
