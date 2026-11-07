@@ -35,14 +35,23 @@
 
 | 能力 | 状态 | 说明 |
 |------|:----:|------|
-| 楼栋级联 `buildings` | ✅ | 根节点 `001000`；根接口返回 116 条，按 `BuildingID` 去重后 **88 栋**，6 个分组 |
-| 楼层 `floors` | ✅ | 例：`1号公寓` 4–5 层 |
-| 房间 `rooms` | ✅ | 例：`003` 组 `1号公寓` `1楼` 36 间 |
-| 房间 → 表号 `room` | ✅ | `/selectmeter` 页面内嵌 `data = ref(JSON.parse('[{"comAddress":...}]'))`，可解析 |
+| 楼栋 `buildings` | ✅ | 静态快照 88 栋 / 502 层 / 18,089 间 / 6 个分组；刷新时根接口 116 条按 `BuildingID` 去重 |
+| 楼层 `floors` | ✅ | 静态快照；例：`1号公寓` 4–5 层 |
+| 房间 `rooms` | ✅ | 静态快照；例：`003` 组 `1号公寓` `1楼` 36 间 |
+| 房间 → 表号 `room` | ✅ | 静态树解析房间；动态 `/login` + `/selectmeter` 取表号 |
 | 余额 `meter_main` | ✅ | 预付费余额、补助余额、总余额、累计电量、闸位、抄表时间、计费类型 |
 | 月账单 `electricbill` | ✅ | `qcdl` 期初、`qmdl` 期末、`ydl` 用电量、`ydje` 金额 |
 | 日明细 `electricdetail` | ✅ | 每日 `sj`、`ydl`、`ydje` |
 | 房间地址 | ❌ | 站点 `roomaddr` 返回 `undefined`，`balance.room` 为 `null` |
+
+## 静态数据与动态数据
+
+| 类型 | 数据 | 来源 | 更新方式 |
+|------|------|------|----------|
+| 静态 | 楼栋 / 楼层 / 房间树（88 栋 / 502 层 / 18,089 间） | `src/electricity/data/changan_tree.json` 本地快照 | 仅 `bdfetch buildings --refresh` |
+| 动态 | 绑房、表号、余额、月账单、日明细 | `/login`、`/selectmeter`、`/meter_main`、`/electricbill`、`/electricdetail` | 每次查询实时请求 |
+
+楼栋/房间结构几乎不变，默认命令（`buildings` / `floors` / `rooms` / `room` 的路径解析）不访问 `/getB`；只有显式 `--refresh` 才重新抓取并覆盖快照。这样避免每次查询几百次 `/getB` 请求，也避免站点限流。全树刷新一次约数分钟，生成约 2.5MB JSON；只在结构变化时执行。
 
 ## 安装
 
@@ -121,11 +130,12 @@ monitor    短时轮询余额
 ### `buildings`
 
 ```bash
-bdfetch buildings
+bdfetch buildings                  # 读本地静态快照，不访问站点
+bdfetch buildings --refresh        # 显式刷新：访问 /getB 全树，耗时较长
 bdfetch buildings --out output/buildings.json
 ```
 
-输出字段：`name`、`id`、`group`（3 位分组）、`group_area`（观测到的区域名）。根接口有重复条目，程序会按 `BuildingID` 去重。
+输出字段：`name`、`id`、`group`（3 位分组）、`group_area`（观测到的区域名）、`floor_count`、`room_count`，以及 `tree.updated_at` / `tree.counts` 元信息。刷新时会按 `BuildingID` 去重。
 
 ### `floors` / `rooms`
 
@@ -135,7 +145,7 @@ bdfetch floors --building 001000003000001          # 也可以直接传 15 位�
 bdfetch rooms  --building 1号公寓 --group 003 --floor 1楼
 ```
 
-`--group` 用于同名楼栋消歧（如 `1号公寓` 同时出现在 `003/005/006/007` 组）。不传且名称不唯一时，会报错并列出候选。
+`--group` 用于同名楼栋消歧（如 `1号公寓` 同时出现在 `003/005/006/007` 组）。不传且名称不唯一时，会报错并列出候选。楼层/房间均来自静态快照，不访问站点。
 
 ### `room`
 
@@ -148,6 +158,7 @@ bdfetch room --building 1号公寓 --group 003 --floor 1楼 --scan-floor --resum
 
 - `--scan-floor` 会跳过占位房间「充值前请确认房间」，避免浪费绑房次数。
 - `--resume` 读取已有 JSON，跳过已扫到的房间。
+- 楼栋/楼层/房间路径来自静态快照；只有 `/login` + `/selectmeter` 是动态请求。
 
 `--json` 返回的主要字段：
 
@@ -264,9 +275,9 @@ describe_id("001000003000001000001001")
 ```text
 GET  /?id=65
 POST /selectarea        {areaId, areaName}
-POST /getB              {bID: root|group|building}   → floor 数组（楼栋）
-POST /getB              {fID: building_id}          → room 数组（楼层）
-POST /getB              {rID1: floor_id}            → room1 数组（房间）
+POST /getB              {bID: root|group|building}   → floor 数组（楼栋）   # 仅 --refresh
+POST /getB              {fID: building_id}          → room 数组（楼层）     # 仅 --refresh
+POST /getB              {rID1: floor_id}            → room1 数组（房间）    # 仅 --refresh
 POST /login             {buildingInfo, buildingID}  → href=selectmeter
 GET  /selectmeter                                    内嵌 data=ref(JSON.parse(...))
 POST /selectmeter       {comAddress, hidType:"电表"}  → url=/meter_main
@@ -276,17 +287,18 @@ POST /electricdetail    {month, comAddress}          日明细（必须 POST）
 POST /phonejcbd                                      解绑（band=1 时）
 ```
 
-响应字段名统一是 `BuildingName` / `BuildingID`；层级由请求键和数组名决定。高层查询还会附带 `room` / `room1` 预览（第一栋的楼层/第一层的房间），枚举时不要误当成完整列表。
+`/getB` 只在 `bdfetch buildings --refresh` 刷新静态树时使用；默认查询不访问。响应字段名统一是 `BuildingName` / `BuildingID`；层级由请求键和数组名决定。高层查询还会附带 `room` / `room1` 预览（第一栋的楼层/第一层的房间），枚举时不要误当成完整列表。
 
 ## 站点行为与坑
 
 1. **绑房状态 `band=1`**：绑定过房间后 `selectarea` 返回 `band=1`，此时 `/getB` 返回 500。程序会自动 `POST /phonejcbd` 解绑后重试；页面提示换房次数上限 4 次，批量扫描请控制频率。
 2. **占位房间**：部分楼栋 `1楼` 首个房间是「充值前请确认房间」，`JSON.parse('[]')` 无表号；`--scan-floor` 会跳过。
 3. **OAuth 跳转**：非微信 UA 访问 `GET /?id=65` 会 302 到 `open.weixin.qq.com`；本项目请求已带 MicroMessenger UA，余额/账单/明细/级联链路不受影响。
-4. **楼栋重复**：根接口 `bID=001000` 返回 116 条，其中 88 个唯一 `BuildingID`；程序已去重。按 group 查询也会去重（13/5/6/26/24/14）。
+4. **楼栋重复**：刷新时根接口 `bID=001000` 返回 116 条，其中 88 个唯一 `BuildingID`；刷新逻辑已去重。按 group 查询也会去重（13/5/6/26/24/14）。
 5. **楼名不唯一**：`1号公寓` 同时出现在 `003/005/006/007` 组；请用 `--group` 或 15 位楼栋 ID。
 6. **房间序号不是房号**：`room` 段是楼层内顺序号；106 可能对应 `005`。
 7. **房间地址**：`roomaddr` 返回 `undefined`，`balance.room` 为 `null`。
+8. **静态快照可能过期**：站点新增/调整楼栋房间后，`buildings` / `floors` / `rooms` / `room` 可能找不到；运行 `bdfetch buildings --refresh` 更新快照。
 
 ## 故障排查
 
@@ -295,6 +307,8 @@ POST /phonejcbd                                      解绑（band=1 时）
 | `bdfetch` 不是内部或外部命令 | 未激活 venv / 不在 PATH | `.\.venv\Scripts\Activate.ps1`，或 `uv run bdfetch` |
 | `楼栋不唯一` | 同名楼栋跨分组 | 加 `--group 003`，或传 15 位楼栋 ID |
 | `/getB` 500 / 级联失败 | 已绑房 `band=1` | 程序会自动 `/phonejcbd`；仍失败则稍后重试，避免频繁换房 |
+| `缺少静态楼栋快照` | 未生成 / 被删除 | `bdfetch buildings --refresh` |
+| `找不到房间/楼层` | 静态快照过期 | 先 `bdfetch buildings --refresh`，再确认名称 |
 | `GET /?id=65` 302 OAuth | 非微信 UA | 用本项目请求（已带 MicroMessenger UA），不要用普通浏览器直接调 API |
 | 房间存在但无表号 | 占位/空置/锁房 | 换真实房间；`--scan-floor` 会跳过「充值前请确认房间」 |
 | `balance.room` 为 null | 站点 `roomaddr=undefined` | 正常现象，用房间级联结果代替 |
@@ -305,14 +319,19 @@ POST /phonejcbd                                      解绑（band=1 时）
 ```python
 from electricity import (
     AREA_ID, AREA_NAME, CAMPUS_ROOT,
-    query_meter, query_room, list_buildings,
+    query_meter, query_room,
+    list_buildings, list_floors, list_rooms, load_tree,
     split_id, describe_id,
 )
 
 print(AREA_ID, AREA_NAME, CAMPUS_ROOT)   # 65 长安大学 001000
 
 for b in list_buildings():
-    print(b["group_area"], b["name"], b["id"])
+    print(b["group_area"], b["name"], b["id"], b["room_count"])
+
+floors = list_floors("1号公寓", group="003")
+rooms = list_rooms("1号公寓", "1楼", group="003")
+print(len(floors["floors"]), len(rooms["rooms"]))
 
 r = query_meter("<表号>", include_detail=True)
 print(r["balance"]["total_yuan"])
@@ -326,7 +345,7 @@ room = query_room(
 print(room["meter"])
 ```
 
-`list_buildings()` / `query_meter()` / `query_room()` 默认就是长安大学（`areaId=65`、`areaName=长安大学`、`campus_root=001000`），无需再传学校参数。
+`list_buildings()` / `list_floors()` / `list_rooms()` / `load_tree()` 只读本地静态快照，不访问网络；`query_meter()` / `query_room()` 默认就是长安大学，无需再传学校参数。需要更新静态树时调用 `refresh_tree()`（会访问 `/getB`，耗时较长），或运行 `bdfetch buildings --refresh`。
 
 ## 项目结构
 
@@ -343,13 +362,16 @@ print(room["meter"])
     ├── __init__.py           # 公开 API
     ├── __main__.py           # python -m electricity
     ├── changan.py            # 长安大学常量、档案、代号拆分
+    ├── tree.py               # 静态楼栋树：快照加载/查询/刷新
     ├── cli.py                # bdfetch 入口
-    ├── meter.py              # 表号直查
-    ├── room.py               # 房间级联
+    ├── meter.py              # 表号直查（动态）
+    ├── room.py               # 房间→表号（静态树 + 动态绑房）
     ├── session.py            # 匿名会话 / 选校 / 解绑
     ├── client.py             # UA 与站点常量
     ├── util.py
-    └── data/changan.json     # 能力、分组、代号规则、验证备注
+    └── data/
+        ├── changan.json      # 能力、分组、代号规则、验证备注
+        └── changan_tree.json # 楼栋/楼层/房间静态快照
 ```
 
 ## 开发与验证
@@ -372,14 +394,16 @@ uv build
 | [README.md](README.md) | 本文件：上游关系、安装、CLI、代号规则、HTTP、坑与排查 |
 | [VERIFY.md](VERIFY.md) | 环境、重构说明、19 项离线自检、长安大学实测与证据 |
 | [src/electricity/data/changan.json](src/electricity/data/changan.json) | 能力、计数、分组、代号规则、验证备注（机器可读） |
+| [src/electricity/data/changan_tree.json](src/electricity/data/changan_tree.json) | 楼栋/楼层/房间静态快照（默认查询的数据源） |
 | [src/electricity/changan.py](src/electricity/changan.py) | 常量、档案加载、`split_id` / `describe_id` |
+| [src/electricity/tree.py](src/electricity/tree.py) | 静态树加载/查询/显式刷新 |
 | [tests/test_offline.py](tests/test_offline.py) | 离线自检（档案/代号/CLI/公开 API） |
 | [config.example.env](config.example.env) | 配置占位（长安大学查询无需配置） |
 | [LICENSE](LICENSE) | MIT 许可证 |
 
 ## 隐私与免责
 
-1. 本仓库不包含真实表号、房间号、余额金额；`output/` 与探针文件已被 `.gitignore` 忽略。
+1. 静态快照包含站点公开的楼栋/楼层/房间名称与 ID（用于离线解析）；不包含表号、余额金额、个人绑定信息。`output/` 与探针文件已被 `.gitignore` 忽略。
 2. 请只查询本人有权查询的数据，勿公开真实表号与房间信息。
 3. 接口以站点为准，可能变更；本项目只覆盖长安大学，不保证其他学校可用。
 4. 使用风险自负，请遵守学校与服务方相关规定。
