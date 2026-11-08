@@ -59,7 +59,7 @@ def _add_group_arg(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--group",
         default=None,
-        help="楼栋分组：003=北院、004=东院、005=西院、006/007=渭水校区、008=混合",
+        help="楼栋分组：003=北院、004=东院、005=西院、006=渭水（优先）、007=渭水（疑似重复树）、008=混合",
     )
 
 

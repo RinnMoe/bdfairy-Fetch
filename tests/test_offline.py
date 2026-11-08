@@ -71,6 +71,12 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(areas["007"], "渭水校区")
         self.assertEqual(areas["008"], "混合")
 
+    def test_group_statuses(self) -> None:
+        groups = {g["code"]: g for g in load_profile()["groups"]}
+        self.assertEqual(groups["006"]["status"], "verified")
+        self.assertEqual(groups["007"]["status"], "duplicate_suspect")
+        self.assertEqual(groups["008"]["status"], "mixed")
+
     def test_id_rule_profile(self) -> None:
         widths = load_profile()["id_rule"]["widths"]
         self.assertEqual(
