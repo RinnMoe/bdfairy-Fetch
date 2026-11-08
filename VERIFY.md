@@ -64,7 +64,7 @@ uv run bdfetch --help
 ./.venv/Scripts/python.exe -m unittest discover -s tests -v
 ```
 
-结果：`Ran 24 tests ... OK`。
+结果：`Ran 26 tests ... OK`。
 
 覆盖：
 
@@ -74,7 +74,7 @@ uv run bdfetch --help
 - 分组：`003=北院`、`004=东院`、`005=西院`、`006/007=渭水校区`、`008=混合`。
 - 代号拆分：`root(6)+group(3)+building(6)+floor(6)+room(3)`。
 - 静态树快照：88 栋 / 502 层 / 18,089 间；`003/1号公寓` 4 层 144 间；`1楼` 36 间；首项为占位房间。
-- `extract_meters` 能解析 `/selectmeter` 的 `JSON.parse('[{"comAddress":...}]')`。
+- `extract_meters` / `extract_meter_rows` 能解析 `/selectmeter` 的 `JSON.parse('[{"comAddress":...}]')`，并保留一房多表（空调/照明）记录。
 - CLI 已无 `schools` 子命令；`info/floors/rooms/room/meter/buildings --refresh` 参数解析正常。
 - `from electricity import ...` 与 `__version__`。
 
@@ -96,6 +96,14 @@ uv run bdfetch --help
 | `balance.room` | `null`（站点 `roomaddr=undefined`） |
 
 默认 `buildings` / `floors` / `rooms` 不访问 `/getB`：用 `--base http://127.0.0.1:9` 仍能返回快照，已验证。
+
+### 多表房间
+
+实测某渭水房间返回 **2 个表**，`PipLineName` 分别带 `(空调)` / `(照明)`：
+
+- 两个表都有效，可独立查询余额 / 月账单 / 日明细；一个表合闸有余额，另一个表跳闸且余额为 0（具体数值不记录）。
+- `room` 返回 `meters[]`（全部表号）与 `meter_rows[]`（设备明细，含 `PipLineName`、`EqptTypeName` 等）；`meter` 只是第一个。
+- `--with-balance` 会逐个查询所有表；`--scan-floor` 导出记录在多表时带 `meters[]`，不会丢表。
 
 复现命令：
 
@@ -157,4 +165,4 @@ uv run bdfetch --help
 - 依赖补齐完成：`.venv` + editable install，`bdfetch`、`python -m electricity`、`from electricity import ...` 均可运行。
 - 项目已从“55 校通用工具”收敛为“长安大学单校研究/适配工具”；上游过时/错误的 55 校分层与 `cascade_ok` 结论已清除。
 - 楼栋/楼层/房间改为本地静态快照（88 栋 / 502 层 / 18,089 间），默认查询不访问 `/getB`；仅 `buildings --refresh` 显式刷新。
-- 长安大学已验证：静态树 → 房间 → 动态表号 → 余额 → 月账单 → 日明细。
+- 长安大学已验证：静态树 → 房间 → 动态表号 → 余额 → 月账单 → 日明细；一房多表（空调/照明）也会全部保留。

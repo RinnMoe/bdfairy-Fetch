@@ -159,13 +159,16 @@ bdfetch room --building 1号公寓 --group 003 --floor 1楼 --scan-floor --resum
 - `--scan-floor` 会跳过占位房间「充值前请确认房间」，避免浪费绑房次数。
 - `--resume` 读取已有 JSON，跳过已扫到的房间。
 - 楼栋/楼层/房间路径来自静态快照；只有 `/login` + `/selectmeter` 是动态请求。
+- **一个房间可能有多个表**（如空调 / 照明）：`meters[]` 是全部表号，`meter_rows[]` 含 `PipLineName`（如 `...(空调)` / `...(照明)`）、`EqptTypeName` 等；`meter` 只是第一个。`--with-balance` 会逐个查询所有表。
+- `--scan-floor` 导出的记录在多个表时会带 `meters[]`，不会只保留第一个表。
 
 `--json` 返回的主要字段：
 
 | 字段 | 说明 |
 |------|------|
 | `ok` | 是否解析到表号 |
-| `meter` / `meters[]` | 表号（通常 1 个） |
+| `meter` / `meters[]` | 第一个表号 / 全部表号 |
+| `meter_rows[]` | 设备明细：`comAddress`、`PipLineName`（空调/照明）、`EqptTypeName`、`EnergyTypeName` 等 |
 | `path.group` / `path.group_area` | 楼栋分组 / 观测区域 |
 | `path.building` / `path.floor` / `path.room` | 实际匹配到的级联路径 |
 | `building_info` / `building_id` | `POST /login` 使用的 buildingInfo / 房间 ID |
@@ -299,6 +302,7 @@ POST /phonejcbd                                      解绑（band=1 时）
 6. **房间序号不是房号**：`room` 段是楼层内顺序号；106 可能对应 `005`。
 7. **房间地址**：`roomaddr` 返回 `undefined`，`balance.room` 为 `null`。
 8. **静态快照可能过期**：站点新增/调整楼栋房间后，`buildings` / `floors` / `rooms` / `room` 可能找不到；运行 `bdfetch buildings --refresh` 更新快照。
+9. **一房多表**：部分房间有空调 / 照明两个表；不要只取 `meter`，请看 `meters[]` / `meter_rows[]`，或直接用 `--with-balance` 逐个查询。
 
 ## 故障排查
 
@@ -343,6 +347,8 @@ room = query_room(
     room="<房间>",
 )
 print(room["meter"])
+for row in room["meter_rows"]:
+    print(row["comAddress"], row.get("PipLineName"))
 ```
 
 `list_buildings()` / `list_floors()` / `list_rooms()` / `load_tree()` 只读本地静态快照，不访问网络；`query_meter()` / `query_room()` 默认就是长安大学，无需再传学校参数。需要更新静态树时调用 `refresh_tree()`（会访问 `/getB`，耗时较长），或运行 `bdfetch buildings --refresh`。
