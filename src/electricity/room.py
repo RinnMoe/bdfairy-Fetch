@@ -26,13 +26,55 @@ def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def extract_meters(html: str) -> list[str]:
-    """从 /selectmeter 页面提取表号。
+def extract_meter_rows(html: str) -> list[dict[str, Any]]:
+    """解析 /selectmeter 页面内嵌的 ``data = ref(JSON.parse('[...]'))``。
 
-    长安大学页面把设备列表内嵌为
-    ``const data = ref(JSON.parse('[{"comAddress":"...",...}]'))``；
-    这里用正则兼容该 JSON 串，无需执行 JS。
+    返回原始设备记录；长安大学同一房间可能有多个表（如空调 / 照明），
+    记录里的 ``PipLineName`` 会带 ``(空调)`` / ``(照明)`` 后缀。
     """
+    m = re.search(
+        r"data\s*=\s*ref\(\s*JSON\.parse\(\s*'((?:\\'|[^'])*)'\s*\)\s*\)",
+        html,
+    )
+    if not m:
+        m = re.search(
+            r'data\s*=\s*ref\(\s*JSON\.parse\(\s*"((?:\\"|[^"])*)"\s*\)\s*\)',
+            html,
+        )
+    if not m:
+        return []
+    raw = (
+        m.group(1)
+        .replace("\\'", "'")
+        .replace('\\"', '"')
+        .replace("\\\\", "\\")
+    )
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        meter = str(item.get("comAddress") or "").strip()
+        if not meter or meter in seen:
+            continue
+        seen.add(meter)
+        rows.append(item)
+    return rows
+
+
+def extract_meters(html: str) -> list[str]:
+    """从 /selectmeter 页面提取全部表号（保持页面顺序）。"""
+    rows = extract_meter_rows(html)
+    if rows:
+        return [str(r["comAddress"]) for r in rows]
+
+    # 兜底：页面结构变化/JSON 不可解析时用正则
     found: set[str] = set()
     for m in re.findall(r"comAddress['\"\s:=\)]+['\"]?(\d{8,})", html):
         found.add(m)
@@ -124,7 +166,12 @@ def bind_room_get_meters(
         timeout=timeout,
     )
     page_html = decode_body(page)
-    meters = extract_meters(page_html)
+    rows = extract_meter_rows(page_html)
+    meters = [str(r.get("comAddress") or "").strip() for r in rows]
+    meters = [m for m in meters if m]
+    if not rows:
+        meters = extract_meters(page_html)
+        rows = [{"comAddress": m} for m in meters]
     return {
         "ok": bool(meters),
         "building_info": building_info,
@@ -132,6 +179,7 @@ def bind_room_get_meters(
         "login": login,
         "page": href,
         "meters": meters,
+        "meter_rows": rows,
         "meter": meters[0] if meters else None,
         "queried_at": now_iso(),
     }
@@ -186,18 +234,22 @@ def export_record(
     floor: str,
     room: str,
     meter: str,
-) -> dict[str, str]:
-    return {
+    meters: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    rec: dict[str, Any] = {
         "building": building,
         "floor": floor,
         "room": room,
         "meter": meter,
     }
+    if meters and len(meters) > 1:
+        rec["meters"] = list(meters)
+    return rec
 
 
 def save_export(
     path: Path,
-    records: list[dict[str, str]],
+    records: list[dict[str, Any]],
     *,
     meta: Optional[dict] = None,
     empty_keys: Optional[list[str] | set[str]] = None,
@@ -214,7 +266,7 @@ def save_export(
     payload: dict[str, Any] = {
         "updated_at": now_iso(),
         "count": len(records),
-        "fields": ["building", "floor", "room", "meter"],
+        "fields": ["building", "floor", "room", "meter", "meters"],
         "records": records,
     }
     if empty_keys is not None:
@@ -227,7 +279,7 @@ def save_export(
     tmp.replace(path)
 
 
-def load_export_state(path: Path) -> tuple[list[dict[str, str]], set[str]]:
+def load_export_state(path: Path) -> tuple[list[dict[str, Any]], set[str]]:
     if not path.is_file():
         return [], set()
     try:
@@ -235,7 +287,7 @@ def load_export_state(path: Path) -> tuple[list[dict[str, str]], set[str]]:
     except (json.JSONDecodeError, OSError):
         return [], set()
     rows = data.get("records") or data.get("results") or []
-    out: list[dict[str, str]] = []
+    out: list[dict[str, Any]] = []
     skip: set[str] = set()
     for r in rows:
         if not isinstance(r, dict):
@@ -271,9 +323,9 @@ def scan_floor(
     timeout: float = 20.0,
     limit: int = 0,
     skip_keys: Optional[set[str]] = None,
-    on_record: Optional[Callable[[dict[str, str]], None]] = None,
+    on_record: Optional[Callable[[dict[str, Any]], None]] = None,
     on_empty: Optional[Callable[[str], None]] = None,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """扫整层房间 → 表号；房间列表来自静态快照，占位房间直接跳过。"""
     path = resolve_room(building, floor, group=group)
     floor_name = path["floor"]["name"]
@@ -284,7 +336,7 @@ def scan_floor(
 
     campus_label = campus or area_name
     skip_keys = skip_keys or set()
-    records: list[dict[str, str]] = []
+    records: list[dict[str, Any]] = []
     total = len(rooms)
     for i, rm in enumerate(rooms, start=1):
         room_name = rm["name"]
@@ -311,18 +363,27 @@ def scan_floor(
                 timeout=timeout,
             )
             meter = row.get("meter")
+            meters = [str(m) for m in (row.get("meters") or [])]
+            if not meter and meters:
+                meter = meters[0]
             if meter:
                 rec = export_record(
                     building=building_name,
                     floor=floor_name,
                     room=room_name,
                     meter=str(meter),
+                    meters=meters,
                 )
                 records.append(rec)
                 skip_keys.add(key)
                 if on_record:
                     on_record(rec)
-                print(f"[{i}/{total}] {key} → {meter}", flush=True)
+                labels = [
+                    str(r.get("PipLineName") or r.get("comAddress") or "")
+                    for r in (row.get("meter_rows") or [])
+                ]
+                suffix = f" ({', '.join(labels)})" if labels else ""
+                print(f"[{i}/{total}] {key} → {meter}{suffix}", flush=True)
             else:
                 skip_keys.add(key)
                 if on_empty:

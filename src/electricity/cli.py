@@ -172,7 +172,7 @@ def cmd_room(args: argparse.Namespace) -> int:
         existing, _skip = load_export_state(out_path) if args.resume else ([], set())
         by_key = {f"{r['building']}|{r['floor']}|{r['room']}": r for r in existing}
 
-        def on_record(rec: dict[str, str]) -> None:
+        def on_record(rec: dict[str, Any]) -> None:
             k = f"{rec['building']}|{rec['floor']}|{rec['room']}"
             by_key[k] = rec
             save_export(
@@ -252,22 +252,36 @@ def cmd_room(args: argparse.Namespace) -> int:
             "room": (result.get("path") or {}).get("room") or args.room,
             "meter": result["meter"],
             "meters": result.get("meters"),
+            "meter_rows": result.get("meter_rows"),
         }
         print(json.dumps(rec, ensure_ascii=False, indent=2))
         if args.out:
             save_result(rec, args.out)
             print(f"\n→ {args.out}", file=sys.stderr)
-        if args.with_balance and result.get("meter"):
-            print("\n-- 继续查余额 --", file=sys.stderr)
-            bal = query_meter(
-                str(result["meter"]),
-                base=args.base,
-                timeout=args.timeout,
-                include_bill=True,
-                include_detail=False,
-                dump_dir=None,
-            )
-            pretty_print_meter(bal)
+        meters = [str(m) for m in (result.get("meters") or [])]
+        if not meters and result.get("meter"):
+            meters = [str(result["meter"])]
+        if args.with_balance and meters:
+            labels = {
+                str(r.get("comAddress")): str(
+                    r.get("PipLineName") or r.get("comAddress")
+                )
+                for r in (result.get("meter_rows") or [])
+            }
+            for m in meters:
+                print(
+                    f"\n-- 继续查余额：{labels.get(m, m)} ({m}) --",
+                    file=sys.stderr,
+                )
+                bal = query_meter(
+                    m,
+                    base=args.base,
+                    timeout=args.timeout,
+                    include_bill=True,
+                    include_detail=False,
+                    dump_dir=None,
+                )
+                pretty_print_meter(bal)
 
     return 0 if result.get("meter") or result.get("ok") else 2
 
@@ -425,7 +439,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scan-floor", action="store_true", help="扫整层房间→表号")
     p.add_argument("--resume", action="store_true")
     p.add_argument("--limit", type=int, default=0)
-    p.add_argument("--with-balance", action="store_true", help="查到表号后继续查余额")
+    p.add_argument("--with-balance", action="store_true", help="查到表号后继续查余额（多表逐个）")
     p.add_argument("--json", action="store_true")
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_room)
