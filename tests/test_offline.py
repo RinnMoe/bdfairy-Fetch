@@ -29,7 +29,7 @@ from electricity import (
     tree_meta,
 )
 from electricity.cli import build_parser
-from electricity.room import extract_meters
+from electricity.room import export_record, extract_meter_rows, extract_meters
 
 
 class ProfileTests(unittest.TestCase):
@@ -177,6 +177,37 @@ class MeterExtractTests(unittest.TestCase):
     def test_placeholder_room_has_no_meter(self) -> None:
         html = "<script>const data = ref(JSON.parse('[]'))</script>"
         self.assertEqual(extract_meters(html), [])
+
+    def test_two_meters_with_labels(self) -> None:
+        html = (
+            "<script>const data = ref(JSON.parse("
+            "'[{\"comAddress\":\"111111111111\",\"PipLineName\":\"示例406(空调)\"},"
+            "{\"comAddress\":\"222222222222\",\"PipLineName\":\"示例406(照明)\"}]'"
+            "))</script>"
+        )
+        rows = extract_meter_rows(html)
+        self.assertEqual(
+            [r["comAddress"] for r in rows],
+            ["111111111111", "222222222222"],
+        )
+        self.assertEqual(
+            [r["PipLineName"] for r in rows],
+            ["示例406(空调)", "示例406(照明)"],
+        )
+        self.assertEqual(
+            extract_meters(html), ["111111111111", "222222222222"]
+        )
+
+    def test_export_record_keeps_multi_meters(self) -> None:
+        rec = export_record(
+            building="示例楼",
+            floor="4楼",
+            room="示例406",
+            meter="111111111111",
+            meters=["111111111111", "222222222222"],
+        )
+        self.assertEqual(rec["meter"], "111111111111")
+        self.assertEqual(rec["meters"], ["111111111111", "222222222222"])
 
 
 class CliParserTests(unittest.TestCase):
