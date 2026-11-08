@@ -7,6 +7,7 @@
 - 上游原仓库：[guiguisocute/bdfairy-Fetch](https://github.com/guiguisocute/bdfairy-Fetch)（多校通用版，MIT）
 - 本仓库：[RinnMoe/bdfairy-Fetch](https://github.com/RinnMoe/bdfairy-Fetch)（fork）
 - 同步策略：不自动跟随上游多校更新；本仓库只维护长安大学。
+- 研究结论汇总：[RESEARCH.md](./RESEARCH.md)（006/007 有效性、TUN 无法访问、一房多表、站点坑）。
 
 > 本文不记录真实表号、房间号与余额金额；命令中的 `<表号>` / `<房间>` 请替换为你本人有权查询的数据。
 
@@ -176,3 +177,4 @@ uv run bdfetch --help
 - 楼栋/楼层/房间改为本地静态快照（88 栋 / 502 层 / 18,089 间），默认查询不访问 `/getB`；仅 `buildings --refresh` 显式刷新。
 - 长安大学已验证：静态树 → 房间 → 动态表号 → 余额 → 月账单 → 日明细；一房多表（空调/照明）也会全部保留。
 - 渭水校区优先使用 `006`；`007` 疑似重复/旧树，仅作兜底。
+- TUN/fake-IP 代理可能造成瞬时 `RemoteDisconnected`；直连 `bdfairy.cn` 后正常。详见 [RESEARCH.md](./RESEARCH.md)。

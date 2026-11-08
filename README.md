@@ -337,6 +337,7 @@ POST /phonejcbd                                      解绑（band=1 时）
 | `缺少静态楼栋快照` | 未生成 / 被删除 | `bdfetch buildings --refresh` |
 | `找不到房间/楼层` | 静态快照过期 | 先 `bdfetch buildings --refresh`，再确认名称 |
 | `GET /?id=65` 302 OAuth | 非微信 UA | 用本项目请求（已带 MicroMessenger UA），不要用普通浏览器直接调 API |
+| `RemoteDisconnected` / `Empty reply` / HTTPS 握手失败 | TUN/fake-IP 代理链路瞬时不稳定 | 给 `bdfairy.cn` 加 DIRECT 规则或关闭 TUN；重试 |
 | 房间存在但无表号 | 占位/空置/锁房 | 换真实房间；`--scan-floor` 会跳过「充值前请确认房间」 |
 | `balance.room` 为 null | 站点 `roomaddr=undefined` | 正常现象，用房间级联结果代替 |
 | 找不到楼层 | 楼层名不是 `1楼` 格式 | 先 `bdfetch floors` / `bdfetch rooms` 看实际名称 |
@@ -381,6 +382,7 @@ for row in room["meter_rows"]:
 ```text
 .
 ├── README.md
+├── RESEARCH.md               # 研究结论：006/007、TUN、一房多表、站点坑
 ├── VERIFY.md                 # 环境与长安大学实测记录
 ├── pyproject.toml
 ├── requirements.txt          # requests
@@ -421,7 +423,8 @@ uv build
 | 文档 | 内容 |
 |------|------|
 | [README.md](README.md) | 本文件：上游关系、安装、CLI、代号规则、HTTP、坑与排查 |
-| [VERIFY.md](VERIFY.md) | 环境、重构说明、19 项离线自检、长安大学实测与证据 |
+| [RESEARCH.md](RESEARCH.md) | 研究结论：006/007 有效性、TUN 无法访问、一房多表、站点坑 |
+| [VERIFY.md](VERIFY.md) | 环境、重构说明、27 项离线自检、长安大学实测与证据 |
 | [src/electricity/data/changan.json](src/electricity/data/changan.json) | 能力、计数、分组、代号规则、验证备注（机器可读） |
 | [src/electricity/data/changan_tree.json](src/electricity/data/changan_tree.json) | 楼栋/楼层/房间静态快照（默认查询的数据源） |
 | [src/electricity/changan.py](src/electricity/changan.py) | 常量、档案加载、`split_id` / `describe_id` |
